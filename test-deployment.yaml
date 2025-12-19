@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  namespace: testqa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+        compute-type: spot
+    spec:
+      # Allow scheduling on Spot nodes (taint toleration)
+      tolerations:
+      - key: "capacity-type"
+        operator: "Equal"
+        value: "spot"
+        effect: "NoSchedule"
+
+      # Ensure pods ONLY run on Spot nodes
+      nodeSelector:
+        capacity-type: spot
+
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-app-service
+  namespace: testqa
+spec:
+  selector:
+    app: test-app
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP

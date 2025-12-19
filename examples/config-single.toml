@@ -1,0 +1,43 @@
+# SINGLE MODE - Manage one specific deployment
+# Use this when you want to manage exactly one deployment
+# Most secure and predictable option
+
+[kubernetes]
+namespace = "askbuddyqa"
+mode = "single"
+deployment_name = "askbuddy-website-deployment"
+service_name = "askbuddy-website-service"
+
+[monitoring]
+check_interval = "5s"
+health_check_retries = 3
+health_check_interval = "2s"
+
+[migration]
+rollout_timeout = "120s"
+verification_delay = "5s"
+
+[recovery]
+enabled = true
+interval = "5m"
+cooldown = "45m"
+timeout = "3m"
+backoff_base = "15m"
+max_backoff = "4h"
+
+[compute]
+spot_label = "spot"
+fargate_label = "fargate"
+compute_label_key = "compute-type"
+
+[aws]
+region = "us-east-2"
+sqs_queue_url = "https://sqs.us-east-2.amazonaws.com/061039800280/spot-interruption-queue"
+
+[alerts]
+enabled = true
+slack_webhook_url = "https://hooks.slack.com/services/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"
+
+[logging]
+level = "info"
+format = "auto"
