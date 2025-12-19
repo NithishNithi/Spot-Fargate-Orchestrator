@@ -43,10 +43,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Perform startup validation - check target deployment
-	if err := validateTargetDeployment(cfg, k8sClient, mainLogger); err != nil {
-		mainLogger.Error("Target deployment validation failed", "error", err)
-		os.Exit(1)
+	// Perform startup validation - check target deployment (only for single mode)
+	if cfg.IsSingleMode() {
+		if err := validateTargetDeployment(cfg, k8sClient, mainLogger); err != nil {
+			mainLogger.Error("Target deployment validation failed", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		mainLogger.Info("Running in multi-deployment mode, skipping single deployment validation",
+			"mode", cfg.Mode,
+			"namespace", cfg.Namespace)
 	}
 
 	// Create context that listens for interrupt signals from the OS
@@ -96,7 +102,7 @@ func main() {
 }
 
 // validateTargetDeployment performs startup validation to ensure the target
-// deployment exists and has pods running on spot nodes
+// deployment exists and has pods running on spot nodes (single mode only)
 func validateTargetDeployment(cfg *config.Config, k8sClient *client.K8sClient, logger *logger.Logger) error {
 	// Skip validation for local development
 	if os.Getenv("SKIP_SPOT_VALIDATION") == "true" {
@@ -104,7 +110,12 @@ func validateTargetDeployment(cfg *config.Config, k8sClient *client.K8sClient, l
 		return nil
 	}
 
-	logger.Info("Validating target deployment configuration",
+	// This function should only be called for single mode
+	if !cfg.IsSingleMode() {
+		return fmt.Errorf("validateTargetDeployment called for non-single mode: %s", cfg.Mode)
+	}
+
+	logger.Info("Validating target deployment configuration (single mode)",
 		"namespace", cfg.Namespace,
 		"deployment", cfg.DeploymentName,
 		"service", cfg.ServiceName)
