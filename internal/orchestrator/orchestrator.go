@@ -908,18 +908,11 @@ func (o *Orchestrator) handleMultiDeploymentSpotInterruption(ctx context.Context
 		return fmt.Errorf("failed to get deployment configurations: %w", err)
 	}
 
-	// Step 3: Migrate all affected deployments
-	for _, deploymentInfo := range deploymentConfigs {
-		if err := o.migrateDeploymentToFargate(ctx, deploymentInfo, event); err != nil {
-			o.logger.Error("Failed to migrate deployment during spot interruption",
-				"deployment", deploymentInfo.Name,
-				"namespace", deploymentInfo.Namespace,
-				"error", err)
-			// Continue with other deployments even if one fails
-		}
-	}
+	// TWO-PHASE MIGRATION APPROACH
+	// Phase 1: FAN-OUT (fast, non-blocking) - Patch all deployments immediately
+	// Phase 2: OBSERVE (parallel) - Monitor rollouts independently
 
-	return nil
+	return o.executeTwoPhaseMigration(ctx, deploymentConfigs, event)
 }
 
 // ensureZeroDowntimeStrategyForDeployment configures zero-downtime rollout for a specific deployment
@@ -1210,6 +1203,221 @@ func (o *Orchestrator) verifyDeploymentServiceEndpoints(ctx context.Context, ser
 		"service", serviceName,
 		"ready_endpoints", readyEndpoints,
 		"total_endpoints", totalEndpoints)
+
+	return nil
+}
+
+// executeTwoPhaseMigration implements the industry-standard two-phase migration approach
+func (o *Orchestrator) executeTwoPhaseMigration(ctx context.Context, deploymentConfigs []DeploymentConfigInfo, event watcher.SpotEvent) error {
+	o.logger.Info("Starting TWO-PHASE MIGRATION for spot interruption",
+		"deployment_count", len(deploymentConfigs),
+		"instance_id", event.InstanceID,
+		"time_remaining", event.TimeRemaining.String())
+
+	// PHASE 1: FAN-OUT (fast, non-blocking)
+	// Patch all deployments to Fargate immediately without waiting for rollouts
+	patchedDeployments, err := o.phaseFanOut(ctx, deploymentConfigs, event)
+	if err != nil {
+		return fmt.Errorf("phase 1 (fan-out) failed: %w", err)
+	}
+
+	if len(patchedDeployments) == 0 {
+		o.logger.Info("No deployments were successfully patched")
+		return nil
+	}
+
+	// PHASE 2: OBSERVE (parallel)
+	// Monitor all rollouts in parallel, each deployment succeeds/fails independently
+	return o.phaseObserve(ctx, patchedDeployments, event)
+}
+
+// phaseFanOut patches all deployments to Fargate as quickly as possible
+func (o *Orchestrator) phaseFanOut(ctx context.Context, deploymentConfigs []DeploymentConfigInfo, _ watcher.SpotEvent) ([]DeploymentConfigInfo, error) {
+	o.logger.Info("PHASE 1: FAN-OUT - Patching all deployments to Fargate immediately",
+		"deployment_count", len(deploymentConfigs))
+
+	var patchedDeployments []DeploymentConfigInfo
+	fanOutStart := time.Now()
+
+	for _, deploymentInfo := range deploymentConfigs {
+		o.logger.Info("Patching deployment to Fargate (non-blocking)",
+			"deployment", deploymentInfo.Name,
+			"affected_pods", len(deploymentInfo.PodNames))
+
+		// Send migration start alert
+		o.alertManager.MigrationStarted(ctx,
+			deploymentInfo.Name,
+			deploymentInfo.Namespace,
+			o.config.SpotLabel,
+			o.config.FargateLabel)
+
+		// Step 1: Configure zero-downtime strategy
+		if err := o.ensureZeroDowntimeStrategyForDeployment(ctx, deploymentInfo.Name); err != nil {
+			o.logger.Error("Failed to configure zero-downtime strategy, skipping deployment",
+				"deployment", deploymentInfo.Name,
+				"error", err)
+			continue
+		}
+
+		// Step 2: Patch deployment to Fargate (DO NOT WAIT for rollout)
+		if err := o.patcher.PatchComputeTypeWithReason(ctx, deploymentInfo.Name, o.config.FargateLabel, annotations.ReasonSpotInterruption); err != nil {
+			o.logger.Error("Failed to patch deployment to Fargate, skipping",
+				"deployment", deploymentInfo.Name,
+				"error", err)
+
+			// Attempt rollback of zero-downtime strategy
+			if rollbackErr := o.rollbackZeroDowntimeStrategyForDeployment(ctx, deploymentInfo.Name); rollbackErr != nil {
+				o.logger.Error("Failed to rollback zero-downtime strategy",
+					"deployment", deploymentInfo.Name,
+					"error", rollbackErr)
+			}
+			continue
+		}
+
+		// Step 3: Record successful patch (DO NOT wait for rollout completion)
+		o.logger.Info("Deployment successfully patched to Fargate",
+			"deployment", deploymentInfo.Name,
+			"patch_time", time.Since(fanOutStart))
+
+		patchedDeployments = append(patchedDeployments, deploymentInfo)
+	}
+
+	fanOutDuration := time.Since(fanOutStart)
+	o.logger.Info("PHASE 1: FAN-OUT completed",
+		"total_deployments", len(deploymentConfigs),
+		"successfully_patched", len(patchedDeployments),
+		"failed_patches", len(deploymentConfigs)-len(patchedDeployments),
+		"fan_out_duration", fanOutDuration)
+
+	return patchedDeployments, nil
+}
+
+// phaseObserve monitors all rollouts in parallel
+func (o *Orchestrator) phaseObserve(ctx context.Context, patchedDeployments []DeploymentConfigInfo, event watcher.SpotEvent) error {
+	o.logger.Info("PHASE 2: OBSERVE - Monitoring rollouts in parallel",
+		"deployment_count", len(patchedDeployments))
+
+	// Create a channel to collect results from parallel monitoring
+	type migrationResult struct {
+		deploymentName string
+		success        bool
+		error          error
+		duration       time.Duration
+	}
+
+	resultChan := make(chan migrationResult, len(patchedDeployments))
+	observeStart := time.Now()
+
+	// Start parallel monitoring for each deployment
+	for _, deploymentInfo := range patchedDeployments {
+		go func(depInfo DeploymentConfigInfo) {
+			result := migrationResult{
+				deploymentName: depInfo.Name,
+			}
+
+			migrationStart := time.Now()
+
+			// Monitor this deployment's rollout and verification
+			if err := o.monitorDeploymentMigration(ctx, depInfo); err != nil {
+				result.success = false
+				result.error = err
+				result.duration = time.Since(migrationStart)
+
+				o.logger.Error("Deployment migration failed during observation",
+					"deployment", depInfo.Name,
+					"error", err,
+					"duration", result.duration)
+
+				// Attempt rollback for failed deployment
+				if rollbackErr := o.rollbackDeploymentMigration(ctx, depInfo.Name); rollbackErr != nil {
+					o.logger.Error("Failed to rollback deployment after migration failure",
+						"deployment", depInfo.Name,
+						"rollback_error", rollbackErr)
+				}
+			} else {
+				result.success = true
+				result.duration = time.Since(migrationStart)
+
+				o.logger.Info("Deployment migration completed successfully",
+					"deployment", depInfo.Name,
+					"duration", result.duration)
+
+				// Send success alert
+				pods, err := o.k8sClient.GetClientset().CoreV1().Pods(depInfo.Namespace).List(ctx, metav1.ListOptions{
+					LabelSelector: fmt.Sprintf("app=%s", depInfo.Name),
+				})
+				podsCount := 0
+				if err == nil {
+					podsCount = len(pods.Items)
+				}
+
+				o.alertManager.MigrationCompleted(ctx,
+					depInfo.Name,
+					depInfo.Namespace,
+					result.duration,
+					podsCount)
+			}
+
+			resultChan <- result
+		}(deploymentInfo)
+	}
+
+	// Collect results from all parallel migrations
+	var successCount, failureCount int
+	var totalDuration time.Duration
+
+	for i := 0; i < len(patchedDeployments); i++ {
+		result := <-resultChan
+
+		if result.success {
+			successCount++
+		} else {
+			failureCount++
+		}
+
+		if result.duration > totalDuration {
+			totalDuration = result.duration
+		}
+	}
+
+	observeDuration := time.Since(observeStart)
+
+	o.logger.Info("PHASE 2: OBSERVE completed",
+		"total_deployments", len(patchedDeployments),
+		"successful_migrations", successCount,
+		"failed_migrations", failureCount,
+		"observe_duration", observeDuration,
+		"longest_migration", totalDuration,
+		"instance_id", event.InstanceID)
+
+	// Return success if at least one deployment migrated successfully
+	if successCount > 0 {
+		return nil
+	}
+
+	return fmt.Errorf("all %d deployment migrations failed", len(patchedDeployments))
+}
+
+// monitorDeploymentMigration monitors a single deployment's rollout and verification
+func (o *Orchestrator) monitorDeploymentMigration(ctx context.Context, deploymentInfo DeploymentConfigInfo) error {
+	// Step 1: Wait for rollout to complete (using deployment-specific timeout)
+	rolloutTimeout := deploymentInfo.Config.GetRolloutTimeout()
+
+	o.logger.Debug("Waiting for deployment rollout",
+		"deployment", deploymentInfo.Name,
+		"timeout", rolloutTimeout)
+
+	if err := o.monitor.WaitForRollout(ctx, deploymentInfo.Name, rolloutTimeout); err != nil {
+		return fmt.Errorf("rollout failed or timed out: %w", err)
+	}
+
+	o.logger.Debug("Rollout completed, verifying migration",
+		"deployment", deploymentInfo.Name)
+
+	// Step 2: Verify migration with deployment-specific verification delay
+	if err := o.verifyDeploymentMigration(ctx, deploymentInfo); err != nil {
+		return fmt.Errorf("migration verification failed: %w", err)
+	}
 
 	return nil
 }
