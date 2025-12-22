@@ -56,6 +56,10 @@ type Config struct {
 
 	// Logging Configuration
 	LogLevel string `env:"LOG_LEVEL" default:"info"`
+
+	// API Server Configuration
+	APIEnabled bool `env:"API_ENABLED" default:"false"`
+	APIPort    int  `env:"API_PORT" default:"8080"`
 }
 
 // TOMLConfig represents the TOML file structure
@@ -110,6 +114,11 @@ type TOMLConfig struct {
 		Level  string `toml:"level"`
 		Format string `toml:"format"`
 	} `toml:"logging"`
+
+	API struct {
+		Enabled bool `toml:"enabled"`
+		Port    int  `toml:"port"`
+	} `toml:"api"`
 }
 
 // LoadConfig loads configuration from TOML file with environment variable fallback
@@ -140,6 +149,17 @@ func LoadConfig() (*Config, error) {
 	config.SQSQueueURL = getEnvOrTOMLOrDefault("SQS_QUEUE_URL", tomlConfig.AWS.SQSQueueURL, "")
 	config.SlackWebhookURL = getEnvOrTOMLOrDefault("SLACK_WEBHOOK_URL", tomlConfig.Alerts.SlackWebhookURL, "")
 	config.LogLevel = getEnvOrTOMLOrDefault("LOG_LEVEL", tomlConfig.Logging.Level, "info")
+
+	// Load API configuration
+	config.APIEnabled, err = getEnvAsBoolOrTOMLOrDefault("API_ENABLED", tomlConfig.API.Enabled, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid API_ENABLED: %w", err)
+	}
+
+	config.APIPort, err = getEnvAsIntOrTOMLOrDefault("API_PORT", tomlConfig.API.Port, 8080)
+	if err != nil {
+		return nil, fmt.Errorf("invalid API_PORT: %w", err)
+	}
 
 	// Load boolean fields
 	config.AlertsEnabled, err = getEnvAsBoolOrTOMLOrDefault("ALERTS_ENABLED", tomlConfig.Alerts.Enabled, true)
@@ -355,6 +375,13 @@ func (c *Config) Validate() error {
 
 	if c.ComputeLabelKey == "" {
 		errors = append(errors, "COMPUTE_LABEL_KEY cannot be empty")
+	}
+
+	// Validate API configuration
+	if c.APIEnabled {
+		if c.APIPort <= 0 || c.APIPort > 65535 {
+			errors = append(errors, "API_PORT must be between 1 and 65535 when API is enabled")
+		}
 	}
 
 	if len(errors) > 0 {

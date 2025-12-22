@@ -173,7 +173,7 @@ func (p *DeploymentPatcher) generatePatchOperations(deployment *appsv1.Deploymen
 func (p *DeploymentPatcher) generateFargatePatches(deployment *appsv1.Deployment) []PatchOperation {
 	var patchOps []PatchOperation
 
-	// Add Fargate nodeSelector
+	// Ensure nodeSelector exists
 	if deployment.Spec.Template.Spec.NodeSelector == nil {
 		patchOps = append(patchOps, PatchOperation{
 			Op:    "add",
@@ -182,31 +182,24 @@ func (p *DeploymentPatcher) generateFargatePatches(deployment *appsv1.Deployment
 		})
 	}
 
+	// Create the complete Fargate nodeSelector (this will replace the entire nodeSelector)
+	fargateNodeSelector := map[string]string{
+		"eks.amazonaws.com/compute-type": "fargate",
+	}
+
+	// Replace the entire nodeSelector to avoid conflicts
 	patchOps = append(patchOps, PatchOperation{
 		Op:    "replace",
-		Path:  "/spec/template/spec/nodeSelector/eks.amazonaws.com~1compute-type",
-		Value: "fargate",
+		Path:  "/spec/template/spec/nodeSelector",
+		Value: fargateNodeSelector,
 	})
 
-	// Remove spot nodeSelector if it exists
-	if deployment.Spec.Template.Spec.NodeSelector != nil {
-		if _, exists := deployment.Spec.Template.Spec.NodeSelector["capacity-type"]; exists {
-			patchOps = append(patchOps, PatchOperation{
-				Op:   "remove",
-				Path: "/spec/template/spec/nodeSelector/capacity-type",
-			})
-		}
-	}
-
-	// Remove spot tolerations if they exist
-	if deployment.Spec.Template.Spec.Tolerations != nil {
-		// Remove spot toleration by setting empty tolerations array
-		patchOps = append(patchOps, PatchOperation{
-			Op:    "replace",
-			Path:  "/spec/template/spec/tolerations",
-			Value: []corev1.Toleration{},
-		})
-	}
+	// Remove spot tolerations by setting empty tolerations array
+	patchOps = append(patchOps, PatchOperation{
+		Op:    "replace",
+		Path:  "/spec/template/spec/tolerations",
+		Value: []corev1.Toleration{},
+	})
 
 	return patchOps
 }
@@ -215,29 +208,16 @@ func (p *DeploymentPatcher) generateFargatePatches(deployment *appsv1.Deployment
 func (p *DeploymentPatcher) generateSpotPatches(deployment *appsv1.Deployment) []PatchOperation {
 	var patchOps []PatchOperation
 
-	// Remove Fargate nodeSelector if it exists
-	if deployment.Spec.Template.Spec.NodeSelector != nil {
-		if _, exists := deployment.Spec.Template.Spec.NodeSelector["eks.amazonaws.com/compute-type"]; exists {
-			patchOps = append(patchOps, PatchOperation{
-				Op:   "remove",
-				Path: "/spec/template/spec/nodeSelector/eks.amazonaws.com~1compute-type",
-			})
-		}
+	// Create the complete Spot nodeSelector (this will replace the entire nodeSelector)
+	spotNodeSelector := map[string]string{
+		"capacity-type": "spot",
 	}
 
-	// Add spot nodeSelector
-	if deployment.Spec.Template.Spec.NodeSelector == nil {
-		patchOps = append(patchOps, PatchOperation{
-			Op:    "add",
-			Path:  "/spec/template/spec/nodeSelector",
-			Value: map[string]string{},
-		})
-	}
-
+	// Replace the entire nodeSelector to avoid conflicts
 	patchOps = append(patchOps, PatchOperation{
 		Op:    "replace",
-		Path:  "/spec/template/spec/nodeSelector/capacity-type",
-		Value: "spot",
+		Path:  "/spec/template/spec/nodeSelector",
+		Value: spotNodeSelector,
 	})
 
 	// Add spot tolerations
@@ -250,19 +230,11 @@ func (p *DeploymentPatcher) generateSpotPatches(deployment *appsv1.Deployment) [
 		},
 	}
 
-	if deployment.Spec.Template.Spec.Tolerations == nil {
-		patchOps = append(patchOps, PatchOperation{
-			Op:    "add",
-			Path:  "/spec/template/spec/tolerations",
-			Value: spotTolerations,
-		})
-	} else {
-		patchOps = append(patchOps, PatchOperation{
-			Op:    "replace",
-			Path:  "/spec/template/spec/tolerations",
-			Value: spotTolerations,
-		})
-	}
+	patchOps = append(patchOps, PatchOperation{
+		Op:    "replace",
+		Path:  "/spec/template/spec/tolerations",
+		Value: spotTolerations,
+	})
 
 	return patchOps
 }

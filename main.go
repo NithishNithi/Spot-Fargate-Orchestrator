@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"spot-fargate-orchestrator/internal/api"
 	"spot-fargate-orchestrator/internal/config"
 	"spot-fargate-orchestrator/internal/kubernetes/client"
 	"spot-fargate-orchestrator/internal/logger"
@@ -67,6 +68,17 @@ func main() {
 	}
 
 	mainLogger.Info("Orchestrator initialized successfully, starting monitoring loop")
+
+	// Start API server if enabled
+	var apiServerDone chan error
+	if cfg.APIEnabled {
+		mainLogger.Info("Starting API server", "port", cfg.APIPort)
+		apiServer := api.NewServer(cfg, k8sClient)
+		apiServerDone = make(chan error, 1)
+		go func() {
+			apiServerDone <- apiServer.Start(ctx, cfg.APIPort)
+		}()
+	}
 
 	// Start orchestrator in a separate goroutine
 	orchestratorDone := make(chan error, 1)
