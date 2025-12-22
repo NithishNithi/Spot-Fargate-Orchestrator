@@ -1,15 +1,15 @@
 # Test namespace mode configuration
 [kubernetes]
 namespace = "askbuddyqa"
-mode = "single"  # single | namespace | cluster
+mode = "namespace"  # single | namespace | cluster
 
 # Single mode configuration (current - backward compatible)
-deployment_name = "askbuddy-website-deployment"
-service_name = "askbuddy-website-service"
+#deployment_name = "askbuddy-website-deployment"
+#service_name = "askbuddy-website-service"
 
-# Multi-deployment mode configuration (for future use)
-# opt_in_annotation = "spot-orchestrator/enabled"
-# service_label_selector = "app"
+# Multi-deployment mode configuration
+opt_in_annotation = "spot-orchestrator/enabled"
+service_label_selector = "app"
 
 [monitoring]
 check_interval = "5s"
@@ -43,4 +43,4 @@ slack_webhook_url = "https://hooks.slack.com/services/T07K97LASLX/B0A48QXK75J/Hx
 
 [logging]
 level = "info"
-format = "auto"
+format = "console"  # console for readable timestamps, json for structured logs

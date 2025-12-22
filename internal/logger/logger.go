@@ -48,10 +48,10 @@ func New(component string, level LogLevel) *Logger {
 
 	// Check if we should use colored console output
 	if isConsoleOutput() {
-		// Use colored console writer for development
+		// Use colored console writer for development with ISO 8601 format
 		consoleWriter := zerolog.ConsoleWriter{
 			Out:        os.Stdout,
-			TimeFormat: "15:04:05",
+			TimeFormat: "2006-01-02T15:04:05.000Z",
 			NoColor:    false,
 		}
 		logger = zerolog.New(consoleWriter).
@@ -61,8 +61,8 @@ func New(component string, level LogLevel) *Logger {
 			Str("component", component).
 			Logger()
 	} else {
-		// Use JSON output for production
-		zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+		// Use JSON output for production with ISO 8601 format
+		zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z"
 		logger = zerolog.New(os.Stdout).
 			Level(zerologLevel).
 			With().
