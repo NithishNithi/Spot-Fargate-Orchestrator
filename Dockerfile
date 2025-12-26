@@ -1,5 +1,8 @@
 # Multi-stage build for Go application
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
+
+# Install git for go mod download
+RUN apk add --no-cache git
 
 # Set working directory
 WORKDIR /app
@@ -13,32 +16,39 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o orchestrator ./cmd/orchestrator
+# Build the application (main.go is at root level)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflags="-w -s" -o orchestrator .
 
-# Final stage
-FROM alpine:latest
+# Final stage - use Amazon Linux 2023
+FROM amazonlinux:2023
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates, shadow-utils, and AWS CLI
+RUN dnf update -y && \
+    dnf install -y ca-certificates shadow-utils awscli && \
+    dnf clean all
 
 # Create non-root user
-RUN addgroup -g 1001 -S orchestrator && \
-    adduser -u 1001 -S orchestrator -G orchestrator
+RUN groupadd -r orchestrator && \
+    useradd -r -g orchestrator -s /sbin/nologin orchestrator
 
-WORKDIR /root/
+# Create app directory
+WORKDIR /app
 
 # Copy the binary from builder stage
-COPY --from=builder /app/orchestrator .
+COPY --from=builder /app/orchestrator /app/orchestrator
 
 # Change ownership to non-root user
-RUN chown orchestrator:orchestrator orchestrator
+RUN chown -R orchestrator:orchestrator /app
 
 # Switch to non-root user
 USER orchestrator
 
-# Expose port (if needed for health checks)
+# Expose port for API server
 EXPOSE 8080
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD /app/orchestrator --health-check || exit 1
+
 # Run the binary
-CMD ["./orchestrator"]
+ENTRYPOINT ["/app/orchestrator"]

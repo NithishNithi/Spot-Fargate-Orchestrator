@@ -176,78 +176,62 @@ This approach follows the **fan-out pattern** used by:
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- Kubernetes cluster with RBAC permissions
-- AWS EventBridge → SQS setup (see [AWS Setup](#aws-setup))
-- Go 1.21+ (for building from source)
+**Ready to get started?** Follow our comprehensive [Quick Start Guide](QUICKSTART.md) for step-by-step instructions to deploy and configure the orchestrator in 5 minutes.
 
-### 1. Single Deployment Mode (Backward Compatible)
+The guide covers:
+- **Three deployment options**: Docker Compose, Kubernetes, or build from source
+- **Complete AWS setup**: EventBridge and SQS configuration
+- **Deployment configuration**: How to enable orchestrator management
+- **Troubleshooting**: Common issues and solutions
+- **Testing**: How to verify everything works
+
+### TL;DR - Super Quick Start
+
 ```bash
-# Build the orchestrator
-go build -o orchestrator
+# 1. Clone and configure
+git clone <your-repo-url>
+cd spot-fargate-orchestrator/deployments
+cp .env.example .env
+# Edit .env with your SQS queue URL
 
-# Set required environment variables
-export DEPLOYMENT_NAME=my-app
-export SERVICE_NAME=my-app-service
-export SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/spot-interruption-queue
+# 2. Deploy with Docker Compose
+docker-compose up -d
 
-# Optional: Enable Slack alerts
-export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
-
-# Run the orchestrator
-./orchestrator
+# 3. Add annotation to your deployments
+kubectl annotate deployment my-app spot-orchestrator/enabled=true
 ```
 
-### 2. Multi-Deployment Mode (Recommended)
-```bash
-# Set mode and configuration
-export MODE=namespace
-export NAMESPACE=production
-export SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/spot-interruption-queue
-
-# Run the orchestrator
-./orchestrator
-```
-
-### 3. Add Deployments to Management
-```yaml
-# Add this annotation to any deployment you want managed
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  annotations:
-    spot-orchestrator/enabled: "true"  # Opt-in to orchestrator management
-    # Optional: Override global settings per deployment
-    spot-orchestrator/recovery-cooldown: "30m"      # Custom recovery cooldown
-    spot-orchestrator/rollout-timeout: "60s"        # Custom rollout timeout
-    spot-orchestrator/verification-delay: "10s"     # Custom verification delay
-```
-
-### 4. Test Configuration
-```bash
-# Test per-deployment configuration
-go run cmd/test-per-deployment-config/main.go
-
-# Test alerts (if Slack configured)
-go run cmd/test-alerts/main.go
-```
+📖 **[→ Full Quick Start Guide](QUICKSTART.md)**
 
 ## ⚙️ Configuration
 
-The orchestrator supports a **three-layer configuration system** with clear precedence:
+The orchestrator supports flexible configuration through multiple methods. For detailed configuration instructions, see the [Quick Start Guide](QUICKSTART.md#configuration).
+
+### Configuration Hierarchy
 
 1. **Environment Variables** (Highest Priority) - Override everything
-2. **TOML Configuration File** (`config.toml`) - Recommended for development
+2. **TOML Configuration File** (`config.toml`) - Recommended for development  
 3. **Built-in Defaults** (Lowest Priority) - Safe fallbacks
 
 ### Operational Modes
 
+- **Namespace Mode** (Recommended): Manages multiple deployments with opt-in annotations
 - **Single Mode**: Manages one specific deployment (backward compatible)
-- **Namespace Mode**: Manages multiple deployments with opt-in annotations
 
 ### Per-Deployment Configuration
 
-Each deployment can override global settings via annotations, enabling fine-grained control:
+Each deployment can override global settings via annotations. See [QUICKSTART.md](QUICKSTART.md#per-deployment-configuration) for complete details.
+
+**Quick Example:**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    spot-orchestrator/enabled: "true"                    # Required: Opt-in
+    spot-orchestrator/recovery-cooldown: "15m"           # Custom settings
+    spot-orchestrator/allow-fargate: "true"              # Allow Fargate migration
+```
 
 #### Critical API (Fast Recovery)
 ```yaml
@@ -453,7 +437,7 @@ aws events put-rule \
 ```bash
 aws events put-targets \
   --rule spot-interruption-rule \
-  --targets "Id"="1","Arn"="arn:aws:sqs:us-east-1:123456789012:spot-interruption-queue"
+  --targets "Id"="1","Arn"="arn:aws:sqs:us-east-1:xxx:spot-interruption-queue"
 ```
 
 ### 4. Configure IAM Permissions
@@ -469,7 +453,7 @@ The orchestrator needs SQS permissions:
         "sqs:DeleteMessage",
         "sqs:DeleteMessageBatch"
       ],
-      "Resource": "arn:aws:sqs:us-east-1:123456789012:spot-interruption-queue"
+      "Resource": "arn:aws:sqs:us-east-1:xxx:spot-interruption-queue"
     }
   ]
 }

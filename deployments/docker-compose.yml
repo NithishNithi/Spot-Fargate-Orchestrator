@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  spot-orchestrator:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: spot-fargate-orchestrator:latest
+    container_name: spot-orchestrator
+    restart: unless-stopped
+    user: root  # Run as root for local development to access kubeconfig
+    
+    environment:
+      # Required Configuration
+      - SQS_QUEUE_URL=${SQS_QUEUE_URL}
+      - AWS_REGION=${AWS_REGION:-us-east-2}
+      
+      # Kubernetes Configuration
+      - KUBECONFIG=/root/.kube/config
+      
+      # Mode Configuration
+      - MODE=${MODE:-namespace}
+      - NAMESPACE=${NAMESPACE:-default}
+      
+      # Single Mode (if using single mode instead)
+      # - MODE=single
+      # - DEPLOYMENT_NAME=${DEPLOYMENT_NAME}
+      # - SERVICE_NAME=${SERVICE_NAME}
+      
+      # Optional Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - RECOVERY_ENABLED=${RECOVERY_ENABLED:-true}
+      - ALERTS_ENABLED=${ALERTS_ENABLED:-true}
+      
+      # AWS Credentials (if not using IAM roles)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    
+    # Mount kubeconfig and AWS credentials for local development
+    volumes:
+      - ${HOME}/.kube:/root/.kube:ro
+      - ${HOME}/.aws:/root/.aws:ro
+      - ./config.toml:/app/config.toml:ro
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.25'

@@ -1,0 +1,187 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spot-orchestrator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spot-orchestrator
+  namespace: spot-orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spot-orchestrator
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spot-orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spot-orchestrator
+subjects:
+- kind: ServiceAccount
+  name: spot-orchestrator
+  namespace: spot-orchestrator
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: spot-orchestrator-secrets
+  namespace: spot-orchestrator
+type: Opaque
+stringData:
+  SQS_QUEUE_URL: "https://sqs.us-east-1.amazonaws.com/xxx/spot-interruption-queue"
+  SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spot-orchestrator-config
+  namespace: spot-orchestrator
+data:
+  config.toml: |
+    [kubernetes]
+    namespace = "default"
+    mode = "namespace"
+    opt_in_annotation = "spot-orchestrator/enabled"
+    service_label_selector = "app"
+    
+    [monitoring]
+    check_interval = "5s"
+    health_check_retries = 3
+    health_check_interval = "2s"
+    
+    [migration]
+    rollout_timeout = "120s"
+    verification_delay = "5s"
+    
+    [recovery]
+    enabled = true
+    interval = "5m"
+    cooldown = "45m"
+    timeout = "3m"
+    
+    [compute]
+    spot_label = "spot"
+    fargate_label = "fargate"
+    compute_label_key = "compute-type"
+    
+    [aws]
+    region = "us-east-1"
+    
+    [alerts]
+    enabled = true
+    
+    [logging]
+    level = "info"
+    format = "json"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spot-orchestrator
+  namespace: spot-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spot-orchestrator
+  template:
+    metadata:
+      labels:
+        app: spot-orchestrator
+    spec:
+      serviceAccountName: spot-orchestrator
+      containers:
+      - name: orchestrator
+        image: spot-fargate-orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MODE
+          value: "namespace"
+        - name: NAMESPACE
+          value: "default"
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: SQS_QUEUE_URL
+          valueFrom:
+            secretKeyRef:
+              name: spot-orchestrator-secrets
+              key: SQS_QUEUE_URL
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: spot-orchestrator-secrets
+              key: SLACK_WEBHOOK_URL
+              optional: true
+        - name: LOG_LEVEL
+          value: "info"
+        - name: LOG_FORMAT
+          value: "json"
+        - name: RECOVERY_ENABLED
+          value: "true"
+        - name: ALERTS_ENABLED
+          value: "true"
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.toml
+          subPath: config.toml
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /app/orchestrator
+            - --health-check
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /app/orchestrator
+            - --health-check
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: spot-orchestrator-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spot-orchestrator
+  namespace: spot-orchestrator
+spec:
+  selector:
+    app: spot-orchestrator
+  ports:
+  - port: 8080
+    targetPort: 8080

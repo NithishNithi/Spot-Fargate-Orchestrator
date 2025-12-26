@@ -45,6 +45,3 @@ slack_webhook_url = "https://hooks.slack.com/services/xxxxxxxxxxx/xxxxxxxxxxx/xx
 level = "info"
 format = "console"  # console for readable timestamps, json for structured logs
 
-[api]
-enabled = true
-port = 8080
