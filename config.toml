@@ -1,11 +1,11 @@
 # Test namespace mode configuration
 [kubernetes]
-namespace = "askbuddyqa"
+namespace = "name of namespace"
 mode = "namespace"  # single | namespace | cluster
 
 # Single mode configuration (current - backward compatible)
-#deployment_name = "askbuddy-website-deployment"
-#service_name = "askbuddy-website-service"
+#deployment_name = "namespace of deployment"
+#service_name = "namespace of service"
 
 # Multi-deployment mode configuration
 opt_in_annotation = "spot-orchestrator/enabled"
@@ -35,11 +35,11 @@ compute_label_key = "compute-type"
 
 [aws]
 region = "us-east-2"
-sqs_queue_url = "https://sqs.us-east-2.amazonaws.com/061039800280/spot-interruption-queue"
+sqs_queue_url = "https://sqs.us-east-2.amazonaws.com/xxxxxxxxxxxxxx/spot-interruption-queue"
 
 [alerts]
 enabled = true
-slack_webhook_url = "https://hooks.slack.com/services/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"
+slack_webhook_url = "https://hooks.slack.com/services/xxxxxxxxxxx/xxxxxxxxxxx/xxxxxxxxxxxxxxxxxxx"
 
 [logging]
 level = "info"
