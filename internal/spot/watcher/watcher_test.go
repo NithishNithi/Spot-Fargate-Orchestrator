@@ -90,7 +90,9 @@ func TestSpotWatcher_Start_NoInterruption(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/latest/meta-data/instance-id" {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("i-1234567890abcdef0"))
+			if _, err := w.Write([]byte("i-1234567890abcdef0")); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		if r.URL.Path == "/latest/meta-data/spot/instance-action" {
@@ -141,12 +143,16 @@ func TestSpotWatcher_Start_WithInterruption(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/latest/meta-data/instance-id" {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("i-1234567890abcdef0"))
+			if _, err := w.Write([]byte("i-1234567890abcdef0")); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		if r.URL.Path == "/latest/meta-data/spot/instance-action" {
 			w.WriteHeader(http.StatusOK)
-			w.Write(noticeJSON)
+			if _, err := w.Write(noticeJSON); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -161,7 +167,9 @@ func TestSpotWatcher_Start_WithInterruption(t *testing.T) {
 
 	// Start watcher in goroutine
 	go func() {
-		watcher.Start(ctx)
+		if err := watcher.Start(ctx); err != nil && err != context.Canceled {
+			t.Errorf("Watcher failed to start: %v", err)
+		}
 	}()
 
 	// Should receive interruption event
@@ -192,7 +200,9 @@ func TestSpotWatcher_Start_MetadataError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/latest/meta-data/instance-id" {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("i-1234567890abcdef0"))
+			if _, err := w.Write([]byte("i-1234567890abcdef0")); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		if r.URL.Path == "/latest/meta-data/spot/instance-action" {
@@ -277,12 +287,16 @@ func TestSpotWatcher_EventChannelFull(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/latest/meta-data/instance-id" {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("i-1234567890abcdef0"))
+			if _, err := w.Write([]byte("i-1234567890abcdef0")); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		if r.URL.Path == "/latest/meta-data/spot/instance-action" {
 			w.WriteHeader(http.StatusOK)
-			w.Write(noticeJSON)
+			if _, err := w.Write(noticeJSON); err != nil {
+				t.Errorf("Failed to write response: %v", err)
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -301,7 +315,9 @@ func TestSpotWatcher_EventChannelFull(t *testing.T) {
 
 	// Start watcher in goroutine
 	go func() {
-		watcher.Start(ctx)
+		if err := watcher.Start(ctx); err != nil && err != context.Canceled {
+			t.Errorf("Watcher failed to start: %v", err)
+		}
 	}()
 
 	// Read first event to fill buffer
@@ -348,7 +364,9 @@ func TestCheckForInterruption_TimeRemaining(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/latest/meta-data/spot/instance-action" {
 					w.WriteHeader(http.StatusOK)
-					w.Write(noticeJSON)
+					if _, err := w.Write(noticeJSON); err != nil {
+						t.Errorf("Failed to write response: %v", err)
+					}
 					return
 				}
 				w.WriteHeader(http.StatusNotFound)

@@ -413,12 +413,15 @@ func (c *Config) IsMultiDeploymentMode() bool {
 
 // Helper functions for environment variable and TOML parsing
 
+// TODO: Currently unused utility functions - may be used for future config enhancements
+/*
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return defaultValue
 }
+*/
 
 func getEnvOrTOMLOrDefault(envKey, tomlValue, defaultValue string) string {
 	// Environment variable takes precedence
@@ -433,6 +436,7 @@ func getEnvOrTOMLOrDefault(envKey, tomlValue, defaultValue string) string {
 	return defaultValue
 }
 
+/*
 func getEnvAsIntOrDefault(key string, defaultValue int) (int, error) {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -446,6 +450,7 @@ func getEnvAsIntOrDefault(key string, defaultValue int) (int, error) {
 
 	return value, nil
 }
+*/
 
 func getEnvAsIntOrTOMLOrDefault(envKey string, tomlValue int, defaultValue int) (int, error) {
 	// Environment variable takes precedence
@@ -464,6 +469,7 @@ func getEnvAsIntOrTOMLOrDefault(envKey string, tomlValue int, defaultValue int) 
 	return defaultValue, nil
 }
 
+/*
 func getEnvAsDurationOrDefault(key string, defaultValue time.Duration) (time.Duration, error) {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -477,6 +483,7 @@ func getEnvAsDurationOrDefault(key string, defaultValue time.Duration) (time.Dur
 
 	return value, nil
 }
+*/
 
 func getEnvAsDurationOrTOMLOrDefault(envKey string, tomlValue string, defaultValue time.Duration) (time.Duration, error) {
 	// Environment variable takes precedence
@@ -499,6 +506,7 @@ func getEnvAsDurationOrTOMLOrDefault(envKey string, tomlValue string, defaultVal
 	return defaultValue, nil
 }
 
+/*
 func getEnvAsBoolOrDefault(key string, defaultValue bool) (bool, error) {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
@@ -512,6 +520,7 @@ func getEnvAsBoolOrDefault(key string, defaultValue bool) (bool, error) {
 
 	return value, nil
 }
+*/
 
 func getEnvAsBoolOrTOMLOrDefault(envKey string, tomlValue bool, defaultValue bool) (bool, error) {
 	// Environment variable takes precedence

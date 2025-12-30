@@ -207,7 +207,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(health)
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+		s.logger.Error("Failed to encode health response", "error", err)
+		http.Error(w, "Failed to encode health response", http.StatusInternalServerError)
+		return
+	}
+
 }
 
 // corsMiddleware adds CORS headers

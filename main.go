@@ -19,10 +19,29 @@ import (
 	"spot-fargate-orchestrator/internal/orchestrator"
 )
 
+// Build information - set by ldflags during build
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GoVersion = "unknown"
+)
+
 func main() {
+	// Check for version flag
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("Spot Fargate Orchestrator\n")
+		fmt.Printf("Version: %s\n", Version)
+		fmt.Printf("Build Time: %s\n", BuildTime)
+		fmt.Printf("Go Version: %s\n", GoVersion)
+		os.Exit(0)
+	}
+
 	// Initialize logger for main application
 	mainLogger := logger.NewDefault("main")
-	mainLogger.Info("Spot Fargate Orchestrator starting...")
+	mainLogger.Info("Spot Fargate Orchestrator starting...",
+		"version", Version,
+		"build_time", BuildTime,
+		"go_version", GoVersion)
 
 	// Load configuration from environment variables
 	cfg, err := config.LoadConfig()

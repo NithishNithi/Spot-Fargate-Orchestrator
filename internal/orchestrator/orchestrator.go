@@ -330,9 +330,10 @@ func (o *Orchestrator) detectCurrentComputeType(ctx context.Context) (string, er
 }
 
 // migrateToFargate performs the complete migration workflow to Fargate
-func (o *Orchestrator) migrateToFargate(ctx context.Context) error {
-	return o.migrateToFargateWithReason(ctx, annotations.ReasonManual)
-}
+// TODO: Currently unused - may be used for manual migration feature
+// func (o *Orchestrator) migrateToFargate(ctx context.Context) error {
+// 	return o.migrateToFargateWithReason(ctx, annotations.ReasonManual)
+// }
 
 // migrateToFargateWithReason performs the complete migration workflow to Fargate with a specific reason
 func (o *Orchestrator) migrateToFargateWithReason(ctx context.Context, reason string) error {
@@ -788,6 +789,8 @@ func (o *Orchestrator) getDeploymentConfigs(ctx context.Context, deploymentPods 
 }
 
 // migrateDeploymentToFargate migrates a specific deployment to Fargate during spot interruption
+// TODO: Currently unused - may be used for single deployment migration feature
+/*
 func (o *Orchestrator) migrateDeploymentToFargate(ctx context.Context, deploymentInfo DeploymentConfigInfo, event watcher.SpotEvent) error {
 	o.logger.Info("Migrating deployment to Fargate due to spot interruption",
 		"deployment", deploymentInfo.Name,
@@ -874,6 +877,7 @@ func (o *Orchestrator) migrateDeploymentToFargate(ctx context.Context, deploymen
 
 	return nil
 }
+*/
 
 // handleMultiDeploymentSpotInterruption handles spot interruption for multiple deployments
 func (o *Orchestrator) handleMultiDeploymentSpotInterruption(ctx context.Context, event watcher.SpotEvent) error {

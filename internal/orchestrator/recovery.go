@@ -173,9 +173,10 @@ func (r *RecoveryManager) getCurrentComputeType(deployment *appsv1.Deployment) s
 }
 
 // shouldAttemptRecovery checks if we should attempt recovery based on cooldown and backoff (legacy)
-func (r *RecoveryManager) shouldAttemptRecovery(annotations map[string]string) bool {
-	return r.shouldAttemptRecoveryWithConfig(annotations, nil)
-}
+// TODO: Currently unused - legacy function, use shouldAttemptRecoveryWithConfig instead
+// func (r *RecoveryManager) shouldAttemptRecovery(annotations map[string]string) bool {
+// 	return r.shouldAttemptRecoveryWithConfig(annotations, nil)
+// }
 
 // shouldAttemptRecoveryWithConfig checks if we should attempt recovery using deployment-specific config
 func (r *RecoveryManager) shouldAttemptRecoveryWithConfig(annotations map[string]string, deploymentConfig *annotations.DeploymentConfig) bool {
