@@ -30,6 +30,12 @@ type SpotWatcherInterface interface {
 	EventChannel() <-chan watcher.SpotEvent
 }
 
+// RecoveryManagerInterface defines the interface for recovery managers
+type RecoveryManagerInterface interface {
+	Start(ctx context.Context)
+	Stop()
+}
+
 // Orchestrator coordinates all migration workflows
 type Orchestrator struct {
 	config            *config.Config
@@ -41,7 +47,7 @@ type Orchestrator struct {
 	state             *state.State
 	annotationManager *annotations.AnnotationManager
 	alertManager      *alerts.Manager
-	recoveryManager   *RecoveryManager
+	recoveryManager   RecoveryManagerInterface
 	discoveryService  *discovery.DiscoveryService
 	logger            *logger.Logger
 }
@@ -129,7 +135,23 @@ func NewOrchestrator(cfg *config.Config, k8sClient *client.K8sClient) (*Orchestr
 	}
 
 	// Initialize recovery manager (needs orchestrator reference)
-	recoveryManager := NewRecoveryManager(orchestrator)
+	// Use optimized recovery manager if optimizations are enabled, otherwise use regular recovery
+	var recoveryManager interface {
+		Start(ctx context.Context)
+		Stop()
+	}
+
+	if cfg.RateLimitingEnabled || cfg.CachingEnabled || cfg.BatchProcessingEnabled {
+		logger.Info("Using optimized recovery manager with enabled optimizations",
+			"rate_limiting", cfg.RateLimitingEnabled,
+			"caching", cfg.CachingEnabled,
+			"batch_processing", cfg.BatchProcessingEnabled)
+		recoveryManager = NewOptimizedRecoveryManager(orchestrator)
+	} else {
+		logger.Info("Using regular recovery manager (no optimizations enabled)")
+		recoveryManager = NewRecoveryManager(orchestrator)
+	}
+
 	orchestrator.recoveryManager = recoveryManager
 
 	logger.Info("All orchestrator components initialized successfully")
