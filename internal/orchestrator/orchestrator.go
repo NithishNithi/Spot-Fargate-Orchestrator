@@ -38,18 +38,19 @@ type RecoveryManagerInterface interface {
 
 // Orchestrator coordinates all migration workflows
 type Orchestrator struct {
-	config            *config.Config
-	spotWatcher       SpotWatcherInterface
-	patcher           *patcher.DeploymentPatcher
-	monitor           *monitor.RolloutMonitor
-	healthChecker     *checker.HealthChecker
-	k8sClient         *client.K8sClient
-	state             *state.State
-	annotationManager *annotations.AnnotationManager
-	alertManager      *alerts.Manager
-	recoveryManager   RecoveryManagerInterface
-	discoveryService  *discovery.DiscoveryService
-	logger            *logger.Logger
+	config                *config.Config
+	spotWatcher           SpotWatcherInterface
+	patcher               *patcher.DeploymentPatcher
+	monitor               *monitor.RolloutMonitor
+	healthChecker         *checker.HealthChecker
+	k8sClient             *client.K8sClient
+	state                 *state.State
+	annotationManager     *annotations.AnnotationManager
+	alertManager          *alerts.Manager
+	recoveryManager       RecoveryManagerInterface
+	discoveryService      *discovery.DiscoveryService
+	nodeSelectorValidator *patcher.NodeSelectorValidator
+	logger                *logger.Logger
 }
 
 // NewOrchestrator creates a new orchestrator
@@ -1444,6 +1445,75 @@ func (o *Orchestrator) monitorDeploymentMigration(ctx context.Context, deploymen
 	if err := o.verifyDeploymentMigration(ctx, deploymentInfo); err != nil {
 		return fmt.Errorf("migration verification failed: %w", err)
 	}
+
+	return nil
+}
+
+// detectAndFixNodeSelectorConflicts scans for and fixes nodeSelector conflicts during startup
+func (o *Orchestrator) detectAndFixNodeSelectorConflicts(ctx context.Context) error {
+	o.logger.Info("Scanning for nodeSelector conflicts during startup",
+		"namespace", o.config.Namespace)
+
+	// In single deployment mode, check only the configured deployment
+	if o.config.IsSingleMode() {
+		conflict, err := o.nodeSelectorValidator.ValidateDeploymentNodeSelector(ctx, o.config.DeploymentName, o.config.Namespace)
+		if err != nil {
+			return fmt.Errorf("failed to validate deployment nodeSelector: %w", err)
+		}
+
+		if conflict != nil {
+			o.logger.Error("NodeSelector conflict detected during startup",
+				"deployment", conflict.DeploymentName,
+				"conflict_type", conflict.ConflictType,
+				"reason", conflict.Reason)
+
+			// Attempt to fix the conflict - prefer spot for single mode
+			if err := o.nodeSelectorValidator.FixConflict(ctx, conflict, "spot"); err != nil {
+				o.logger.Error("Failed to fix nodeSelector conflict", "error", err)
+				return fmt.Errorf("failed to fix nodeSelector conflict for %s: %w", conflict.DeploymentName, err)
+			}
+
+			o.logger.Info("Successfully fixed nodeSelector conflict",
+				"deployment", conflict.DeploymentName)
+		}
+
+		return nil
+	}
+
+	// In multi-deployment mode, check all deployments in the namespace
+	conflicts, err := o.nodeSelectorValidator.ValidateAllDeployments(ctx, o.config.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to validate deployments: %w", err)
+	}
+
+	if len(conflicts) == 0 {
+		o.logger.Info("No nodeSelector conflicts detected during startup")
+		return nil
+	}
+
+	o.nodeSelectorValidator.LogConflictSummary(conflicts)
+
+	// Attempt to fix all conflicts
+	fixedCount := 0
+	for _, conflict := range conflicts {
+		// Prefer spot for conflict resolution (more cost-effective)
+		if err := o.nodeSelectorValidator.FixConflict(ctx, &conflict, "spot"); err != nil {
+			o.logger.Error("Failed to fix nodeSelector conflict",
+				"deployment", conflict.DeploymentName,
+				"error", err)
+			continue
+		}
+
+		fixedCount++
+		o.logger.Info("Successfully fixed nodeSelector conflict",
+			"deployment", conflict.DeploymentName,
+			"conflict_type", conflict.ConflictType)
+	}
+
+	o.logger.Info("NodeSelector conflict resolution completed",
+		"total_conflicts", len(conflicts),
+		"fixed_conflicts", fixedCount,
+		"failed_fixes", len(conflicts)-fixedCount)
 
 	return nil
 }
