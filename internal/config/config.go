@@ -55,7 +55,8 @@ type Config struct {
 	AlertsEnabled   bool   `env:"ALERTS_ENABLED" default:"true"`
 
 	// Logging Configuration
-	LogLevel string `env:"LOG_LEVEL" default:"info"`
+	LogLevel  string `env:"LOG_LEVEL" default:"info"`
+	LogFormat string `env:"LOG_FORMAT" default:"json"`
 
 	// API Server Configuration
 	APIEnabled bool `env:"API_ENABLED" default:"false"`
@@ -181,6 +182,7 @@ func LoadConfig() (*Config, error) {
 	config.SQSQueueURL = getEnvOrTOMLOrDefault("SQS_QUEUE_URL", tomlConfig.AWS.SQSQueueURL, "")
 	config.SlackWebhookURL = getEnvOrTOMLOrDefault("SLACK_WEBHOOK_URL", tomlConfig.Alerts.SlackWebhookURL, "")
 	config.LogLevel = getEnvOrTOMLOrDefault("LOG_LEVEL", tomlConfig.Logging.Level, "info")
+	config.LogFormat = getEnvOrTOMLOrDefault("LOG_FORMAT", tomlConfig.Logging.Format, "json")
 
 	// Load API configuration
 	config.APIEnabled, err = getEnvAsBoolOrTOMLOrDefault("API_ENABLED", tomlConfig.API.Enabled, false)

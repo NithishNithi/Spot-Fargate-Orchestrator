@@ -55,8 +55,8 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new orchestrator
 func NewOrchestrator(cfg *config.Config, k8sClient *client.K8sClient) (*Orchestrator, error) {
-	// Initialize logger with configured level
-	logger := logger.New("orchestrator", logger.LogLevel(cfg.LogLevel))
+	// Initialize logger with configured level and format
+	logger := logger.NewWithFormat("orchestrator", logger.LogLevel(cfg.LogLevel), cfg.LogFormat)
 
 	logger.Info("Initializing orchestrator components",
 		"namespace", cfg.Namespace,

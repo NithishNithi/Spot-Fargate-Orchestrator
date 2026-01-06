@@ -26,6 +26,11 @@ const (
 
 // New creates a new Logger instance with the specified component name and log level
 func New(component string, level LogLevel) *Logger {
+	return NewWithFormat(component, level, "")
+}
+
+// NewWithFormat creates a new Logger instance with specified component, level, and format
+func NewWithFormat(component string, level LogLevel, format string) *Logger {
 	var zerologLevel zerolog.Level
 	switch strings.ToLower(string(level)) {
 	case "debug":
@@ -43,12 +48,12 @@ func New(component string, level LogLevel) *Logger {
 	// Set global log level
 	zerolog.SetGlobalLevel(zerologLevel)
 
-	// Determine output format based on environment
+	// Determine output format
 	var logger zerolog.Logger
 
-	// Check if we should use colored console output
-	if isConsoleOutput() {
-		// Use colored console writer for development with ISO 8601 format
+	// Check if we should use console output
+	if shouldUseConsoleOutput(format) {
+		// Use colored console writer for text format
 		consoleWriter := zerolog.ConsoleWriter{
 			Out:        os.Stdout,
 			TimeFormat: "2006-01-02T15:04:05.000Z",
@@ -61,7 +66,7 @@ func New(component string, level LogLevel) *Logger {
 			Str("component", component).
 			Logger()
 	} else {
-		// Use JSON output for production with ISO 8601 format
+		// Use JSON output
 		zerolog.TimeFieldFormat = "2006-01-02T15:04:05.000Z"
 		logger = zerolog.New(os.Stdout).
 			Level(zerologLevel).
@@ -77,22 +82,27 @@ func New(component string, level LogLevel) *Logger {
 	}
 }
 
-// isConsoleOutput determines if we should use colored console output
-func isConsoleOutput() bool {
-	// Use console output if:
-	// 1. LOG_FORMAT is set to "console"
-	// 2. We're in development (no LOG_FORMAT set and stdout is a terminal)
-	logFormat := strings.ToLower(os.Getenv("LOG_FORMAT"))
-
-	if logFormat == "console" {
+// shouldUseConsoleOutput determines if we should use console (text) output
+func shouldUseConsoleOutput(configFormat string) bool {
+	// Priority 1: Explicit config format parameter
+	switch strings.ToLower(configFormat) {
+	case "text", "console":
 		return true
-	}
-
-	if logFormat == "json" {
+	case "json":
 		return false
 	}
 
-	// Default: use console if stdout is a terminal (development mode)
+	// Priority 2: Environment variable
+	logFormat := strings.ToLower(os.Getenv("LOG_FORMAT"))
+	switch logFormat {
+	case "text", "console":
+		return true
+	case "json":
+		return false
+	}
+
+	// Priority 3: Default behavior - JSON for production, console for development
+	// Use console if stdout is a terminal (development mode)
 	if fileInfo, err := os.Stdout.Stat(); err == nil {
 		return (fileInfo.Mode() & os.ModeCharDevice) != 0
 	}

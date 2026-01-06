@@ -36,9 +36,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize logger for main application
-	mainLogger := logger.NewDefault("main")
-	mainLogger.Info("Spot Fargate Orchestrator starting...",
+	// Initialize temporary logger for startup (before config is loaded)
+	tempLogger := logger.NewDefault("main")
+	tempLogger.Info("Spot Fargate Orchestrator starting...",
 		"version", Version,
 		"build_time", BuildTime,
 		"go_version", GoVersion)
@@ -46,15 +46,18 @@ func main() {
 	// Load configuration from environment variables
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		mainLogger.Error("Failed to load configuration", "error", err)
+		tempLogger.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
 
+	// Re-initialize logger with config settings
+	mainLogger := logger.NewWithFormat("main", logger.LogLevel(cfg.LogLevel), cfg.LogFormat)
 	mainLogger.Info("Configuration loaded successfully",
 		"namespace", cfg.Namespace,
 		"deployment", cfg.DeploymentName,
 		"service", cfg.ServiceName,
-		"log_level", cfg.LogLevel)
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat)
 
 	// Initialize Kubernetes client once for both validation and orchestrator
 	k8sClient, err := client.NewK8sClient(cfg.Namespace)
