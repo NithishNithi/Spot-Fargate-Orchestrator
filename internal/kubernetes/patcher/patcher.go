@@ -131,14 +131,29 @@ func (p *DeploymentPatcher) generatePatchOperations(deployment *appsv1.Deploymen
 		currentComputeType = deployment.Spec.Template.Labels["compute-type"]
 	}
 
-	// Skip if already the target compute type
-	if currentComputeType == targetComputeType {
+	// Check for nodeSelector conflicts - ALWAYS patch if conflicts exist
+	hasConflicts := p.hasNodeSelectorConflicts(deployment, targetComputeType)
+
+	// Skip only if already the target compute type AND no conflicts exist
+	if currentComputeType == targetComputeType && !hasConflicts {
+		p.logger.Debug("No patch needed - already correct compute type with no conflicts",
+			"current_compute_type", currentComputeType,
+			"target_compute_type", targetComputeType)
 		return patchOps, nil
+	}
+
+	if hasConflicts {
+		p.logger.Warn("NodeSelector conflicts detected - forcing patch to resolve",
+			"deployment", deployment.Name,
+			"current_compute_type", currentComputeType,
+			"target_compute_type", targetComputeType,
+			"current_node_selector", deployment.Spec.Template.Spec.NodeSelector)
 	}
 
 	p.logger.Debug("Generating patch operations",
 		"current_compute_type", currentComputeType,
-		"target_compute_type", targetComputeType)
+		"target_compute_type", targetComputeType,
+		"has_conflicts", hasConflicts)
 
 	// Ensure labels exist in the template
 	if deployment.Spec.Template.Labels == nil {
@@ -237,4 +252,54 @@ func (p *DeploymentPatcher) generateSpotPatches(deployment *appsv1.Deployment) [
 	})
 
 	return patchOps
+}
+
+// hasNodeSelectorConflicts checks if the deployment has conflicting nodeSelector configurations
+func (p *DeploymentPatcher) hasNodeSelectorConflicts(deployment *appsv1.Deployment, targetComputeType string) bool {
+	nodeSelector := deployment.Spec.Template.Spec.NodeSelector
+	if nodeSelector == nil || len(nodeSelector) == 0 {
+		return false
+	}
+
+	hasSpot := false
+	hasFargate := false
+
+	if capacityType, exists := nodeSelector["capacity-type"]; exists && capacityType == "spot" {
+		hasSpot = true
+	}
+
+	if computeType, exists := nodeSelector["eks.amazonaws.com/compute-type"]; exists && computeType == "fargate" {
+		hasFargate = true
+	}
+
+	// The impossible combination - both spot and fargate
+	if hasSpot && hasFargate {
+		p.logger.Error("CRITICAL: Detected impossible nodeSelector combination",
+			"deployment", deployment.Name,
+			"node_selectors", nodeSelector,
+			"target_compute_type", targetComputeType)
+		return true
+	}
+
+	// Check if current nodeSelector doesn't match target compute type
+	switch targetComputeType {
+	case "fargate":
+		// For Fargate target, we should NOT have spot selectors
+		if hasSpot {
+			p.logger.Warn("Spot nodeSelector detected when targeting Fargate",
+				"deployment", deployment.Name,
+				"node_selectors", nodeSelector)
+			return true
+		}
+	case "spot":
+		// For Spot target, we should NOT have fargate selectors
+		if hasFargate {
+			p.logger.Warn("Fargate nodeSelector detected when targeting Spot",
+				"deployment", deployment.Name,
+				"node_selectors", nodeSelector)
+			return true
+		}
+	}
+
+	return false
 }

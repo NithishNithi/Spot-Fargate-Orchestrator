@@ -55,11 +55,22 @@ type Config struct {
 	AlertsEnabled   bool   `env:"ALERTS_ENABLED" default:"true"`
 
 	// Logging Configuration
-	LogLevel string `env:"LOG_LEVEL" default:"info"`
+	LogLevel  string `env:"LOG_LEVEL" default:"info"`
+	LogFormat string `env:"LOG_FORMAT" default:"json"`
 
 	// API Server Configuration
 	APIEnabled bool `env:"API_ENABLED" default:"false"`
 	APIPort    int  `env:"API_PORT" default:"8080"`
+
+	// Optimization Configuration
+	RateLimitingEnabled    bool          `env:"RATE_LIMITING_ENABLED" default:"false"`
+	RateLimitingQPS        float64       `env:"RATE_LIMITING_QPS" default:"20.0"`
+	RateLimitingBurst      int           `env:"RATE_LIMITING_BURST" default:"50"`
+	CachingEnabled         bool          `env:"CACHING_ENABLED" default:"false"`
+	CachingDeploymentTTL   time.Duration `env:"CACHING_DEPLOYMENT_TTL" default:"2m"`
+	BatchProcessingEnabled bool          `env:"BATCH_PROCESSING_ENABLED" default:"false"`
+	BatchSize              int           `env:"BATCH_SIZE" default:"10"`
+	BatchTimeout           time.Duration `env:"BATCH_TIMEOUT" default:"30s"`
 }
 
 // TOMLConfig represents the TOML file structure
@@ -119,6 +130,28 @@ type TOMLConfig struct {
 		Enabled bool `toml:"enabled"`
 		Port    int  `toml:"port"`
 	} `toml:"api"`
+
+	// Optimization Configuration
+	RateLimiting struct {
+		Enabled bool    `toml:"enabled"`
+		QPS     float64 `toml:"qps"`
+		Burst   int     `toml:"burst"`
+		Timeout string  `toml:"timeout"`
+	} `toml:"rate_limiting"`
+
+	Caching struct {
+		Enabled       bool   `toml:"enabled"`
+		DeploymentTTL string `toml:"deployment_ttl"`
+		NodeTTL       string `toml:"node_ttl"`
+		ServiceTTL    string `toml:"service_ttl"`
+	} `toml:"caching"`
+
+	BatchProcessing struct {
+		Enabled              bool   `toml:"enabled"`
+		BatchSize            int    `toml:"batch_size"`
+		BatchTimeout         string `toml:"batch_timeout"`
+		MaxConcurrentBatches int    `toml:"max_concurrent_batches"`
+	} `toml:"batch_processing"`
 }
 
 // LoadConfig loads configuration from TOML file with environment variable fallback
@@ -149,6 +182,7 @@ func LoadConfig() (*Config, error) {
 	config.SQSQueueURL = getEnvOrTOMLOrDefault("SQS_QUEUE_URL", tomlConfig.AWS.SQSQueueURL, "")
 	config.SlackWebhookURL = getEnvOrTOMLOrDefault("SLACK_WEBHOOK_URL", tomlConfig.Alerts.SlackWebhookURL, "")
 	config.LogLevel = getEnvOrTOMLOrDefault("LOG_LEVEL", tomlConfig.Logging.Level, "info")
+	config.LogFormat = getEnvOrTOMLOrDefault("LOG_FORMAT", tomlConfig.Logging.Format, "json")
 
 	// Load API configuration
 	config.APIEnabled, err = getEnvAsBoolOrTOMLOrDefault("API_ENABLED", tomlConfig.API.Enabled, false)
@@ -159,6 +193,47 @@ func LoadConfig() (*Config, error) {
 	config.APIPort, err = getEnvAsIntOrTOMLOrDefault("API_PORT", tomlConfig.API.Port, 8080)
 	if err != nil {
 		return nil, fmt.Errorf("invalid API_PORT: %w", err)
+	}
+
+	// Load optimization configuration
+	config.RateLimitingEnabled, err = getEnvAsBoolOrTOMLOrDefault("RATE_LIMITING_ENABLED", tomlConfig.RateLimiting.Enabled, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid RATE_LIMITING_ENABLED: %w", err)
+	}
+
+	config.RateLimitingQPS, err = getEnvAsFloatOrTOMLOrDefault("RATE_LIMITING_QPS", tomlConfig.RateLimiting.QPS, 20.0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid RATE_LIMITING_QPS: %w", err)
+	}
+
+	config.RateLimitingBurst, err = getEnvAsIntOrTOMLOrDefault("RATE_LIMITING_BURST", tomlConfig.RateLimiting.Burst, 50)
+	if err != nil {
+		return nil, fmt.Errorf("invalid RATE_LIMITING_BURST: %w", err)
+	}
+
+	config.CachingEnabled, err = getEnvAsBoolOrTOMLOrDefault("CACHING_ENABLED", tomlConfig.Caching.Enabled, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CACHING_ENABLED: %w", err)
+	}
+
+	config.CachingDeploymentTTL, err = getEnvAsDurationOrTOMLOrDefault("CACHING_DEPLOYMENT_TTL", tomlConfig.Caching.DeploymentTTL, 2*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CACHING_DEPLOYMENT_TTL: %w", err)
+	}
+
+	config.BatchProcessingEnabled, err = getEnvAsBoolOrTOMLOrDefault("BATCH_PROCESSING_ENABLED", tomlConfig.BatchProcessing.Enabled, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BATCH_PROCESSING_ENABLED: %w", err)
+	}
+
+	config.BatchSize, err = getEnvAsIntOrTOMLOrDefault("BATCH_SIZE", tomlConfig.BatchProcessing.BatchSize, 10)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BATCH_SIZE: %w", err)
+	}
+
+	config.BatchTimeout, err = getEnvAsDurationOrTOMLOrDefault("BATCH_TIMEOUT", tomlConfig.BatchProcessing.BatchTimeout, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid BATCH_TIMEOUT: %w", err)
 	}
 
 	// Load boolean fields
@@ -537,5 +612,22 @@ func getEnvAsBoolOrTOMLOrDefault(envKey string, tomlValue bool, defaultValue boo
 	if tomlValue || defaultValue {
 		return tomlValue || defaultValue, nil
 	}
+	return defaultValue, nil
+}
+
+func getEnvAsFloatOrTOMLOrDefault(envKey string, tomlValue float64, defaultValue float64) (float64, error) {
+	// Environment variable takes precedence
+	if valueStr := os.Getenv(envKey); valueStr != "" {
+		value, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse %s as float: %w", envKey, err)
+		}
+		return value, nil
+	}
+	// Then TOML value (if not zero)
+	if tomlValue != 0 {
+		return tomlValue, nil
+	}
+	// Finally default
 	return defaultValue, nil
 }
