@@ -4,9 +4,25 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 )
+
+// Global configuration for all loggers
+var (
+	globalLogLevel  LogLevel = LevelInfo
+	globalLogFormat string   = "json"
+	globalMutex     sync.RWMutex
+)
+
+// SetGlobalConfig sets the global logging configuration for all new loggers
+func SetGlobalConfig(level LogLevel, format string) {
+	globalMutex.Lock()
+	defer globalMutex.Unlock()
+	globalLogLevel = level
+	globalLogFormat = format
+}
 
 // Logger wraps zerolog.Logger with additional functionality for structured logging
 type Logger struct {
@@ -112,7 +128,12 @@ func shouldUseConsoleOutput(configFormat string) bool {
 
 // NewDefault creates a logger with default settings (info level)
 func NewDefault(component string) *Logger {
-	return New(component, LevelInfo)
+	globalMutex.RLock()
+	level := globalLogLevel
+	format := globalLogFormat
+	globalMutex.RUnlock()
+
+	return NewWithFormat(component, level, format)
 }
 
 // Debug logs a debug message with structured fields

@@ -37,7 +37,12 @@ func main() {
 	}
 
 	// Initialize temporary logger for startup (before config is loaded)
-	tempLogger := logger.NewDefault("main")
+	// Check if LOG_FORMAT env var is set to use text format even before config load
+	tempFormat := "json" // default
+	if envFormat := os.Getenv("LOG_FORMAT"); envFormat != "" {
+		tempFormat = envFormat
+	}
+	tempLogger := logger.NewWithFormat("main", logger.LevelInfo, tempFormat)
 	tempLogger.Info("Spot Fargate Orchestrator starting...",
 		"version", Version,
 		"build_time", BuildTime,
@@ -52,6 +57,10 @@ func main() {
 
 	// Re-initialize logger with config settings
 	mainLogger := logger.NewWithFormat("main", logger.LogLevel(cfg.LogLevel), cfg.LogFormat)
+
+	// Set global logger configuration for all components
+	logger.SetGlobalConfig(logger.LogLevel(cfg.LogLevel), cfg.LogFormat)
+
 	mainLogger.Info("Configuration loaded successfully",
 		"namespace", cfg.Namespace,
 		"deployment", cfg.DeploymentName,
