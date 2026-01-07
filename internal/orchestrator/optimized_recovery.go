@@ -3,14 +3,16 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"spot-fargate-orchestrator/internal/kubernetes/annotations"
 	"spot-fargate-orchestrator/internal/kubernetes/cache"
+	"spot-fargate-orchestrator/internal/kubernetes/discovery"
 	"spot-fargate-orchestrator/internal/logger"
 )
 
@@ -127,10 +129,10 @@ func (orm *OptimizedRecoveryManager) Start(ctx context.Context) {
 func (orm *OptimizedRecoveryManager) attemptOptimizedRecovery(ctx context.Context) error {
 	startTime := time.Now()
 
-	// Rate limit the recovery attempt (only if rate limiting is enabled)
+	// Rate limit the entire recovery attempt (only if rate limiting is enabled)
 	if orm.rateLimiter != nil {
 		if err := orm.rateLimiter.Wait(ctx); err != nil {
-			return fmt.Errorf("rate limiter error: %w", err)
+			return fmt.Errorf("rate limiter error at start: %w", err)
 		}
 	}
 
@@ -140,12 +142,17 @@ func (orm *OptimizedRecoveryManager) attemptOptimizedRecovery(ctx context.Contex
 
 	if orm.deploymentCache != nil {
 		// Use cache (reduces API calls)
+		orm.logger.Debug("Using deployment cache for discovery")
 		deploymentList, err = orm.deploymentCache.ListDeployments(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to list deployments from cache: %w", err)
+			orm.logger.Warn("Cache failed, falling back to direct API", "error", err)
+			// Fall through to direct API call
 		}
-	} else {
+	}
+
+	if deploymentList == nil {
 		// Fall back to direct API calls (same as regular recovery)
+		orm.logger.Debug("Using direct API for deployment discovery")
 		deployments, discErr := orm.orchestrator.discoveryService.DiscoverManagedDeployments(ctx)
 		if discErr != nil {
 			return fmt.Errorf("failed to discover managed deployments: %w", discErr)
@@ -153,18 +160,27 @@ func (orm *OptimizedRecoveryManager) attemptOptimizedRecovery(ctx context.Contex
 
 		// Convert to DeploymentList format
 		deploymentList = &appsv1.DeploymentList{
-			Items: make([]appsv1.Deployment, len(deployments)),
+			Items: make([]appsv1.Deployment, 0, len(deployments)),
 		}
 
-		// Get each deployment (this will make individual API calls)
+		// Get each deployment with rate limiting
 		for i, depInfo := range deployments {
+			// Rate limit between deployment fetches
+			if orm.rateLimiter != nil && i > 0 {
+				if err := orm.rateLimiter.Wait(ctx); err != nil {
+					orm.logger.Warn("Rate limiter error during discovery", "error", err)
+					continue
+				}
+			}
+
 			deployment, getErr := orm.orchestrator.k8sClient.GetClientset().AppsV1().Deployments(depInfo.Namespace).Get(
 				ctx, depInfo.Name, metav1.GetOptions{})
 			if getErr != nil {
-				orm.logger.Warn("Failed to get deployment", "deployment", depInfo.Name, "error", getErr)
+				orm.logger.Warn("Failed to get deployment during discovery",
+					"deployment", depInfo.Name, "error", getErr)
 				continue
 			}
-			deploymentList.Items[i] = *deployment
+			deploymentList.Items = append(deploymentList.Items, *deployment)
 		}
 	}
 
@@ -188,58 +204,111 @@ func (orm *OptimizedRecoveryManager) attemptOptimizedRecovery(ctx context.Contex
 		"caching_enabled", orm.deploymentCache != nil,
 		"rate_limiting_enabled", orm.rateLimiter != nil)
 
-	// Process in batches (or individually if batch processing is disabled)
+	// Process in controlled batches
 	return orm.processBatchRecovery(ctx, candidateDeployments, startTime)
 }
 
-// processBatchRecovery processes deployments in batches or individually
+// processBatchRecovery processes deployments in controlled batches with proper concurrency
 func (orm *OptimizedRecoveryManager) processBatchRecovery(ctx context.Context, deployments []string, startTime time.Time) error {
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, orm.batchSize)
+	totalDeployments := len(deployments)
 
-	for i, deploymentName := range deployments {
-		// Rate limit each batch (only if rate limiting is enabled and batch processing is enabled)
-		if orm.rateLimiter != nil && orm.batchSize > 1 && i > 0 && i%orm.batchSize == 0 {
-			orm.logger.Debug("Batch completed, rate limiting",
-				"batch", i/orm.batchSize,
-				"processed", i)
+	orm.logger.Info("Starting batch recovery processing",
+		"total_deployments", totalDeployments,
+		"batch_size", orm.batchSize,
+		"rate_limiting_enabled", orm.rateLimiter != nil)
 
-			if err := orm.rateLimiter.Wait(ctx); err != nil {
-				return err
-			}
+	// Process deployments in controlled batches
+	for i := 0; i < totalDeployments; i += orm.batchSize {
+		// Calculate batch boundaries
+		end := i + orm.batchSize
+		if end > totalDeployments {
+			end = totalDeployments
 		}
 
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
+		batch := deployments[i:end]
+		batchNumber := (i / orm.batchSize) + 1
 
-			// Acquire semaphore (controls concurrency)
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+		orm.logger.Debug("Processing batch",
+			"batch_number", batchNumber,
+			"batch_size", len(batch),
+			"deployments", batch)
 
-			// Rate limit individual recovery (only if rate limiting is enabled)
-			if orm.rateLimiter != nil {
+		// Process each deployment in the batch SEQUENTIALLY (no goroutines)
+		batchStartTime := time.Now()
+		successCount := 0
+
+		for j, deploymentName := range batch {
+			// Rate limit between deployments within batch
+			if orm.rateLimiter != nil && j > 0 {
 				if err := orm.rateLimiter.Wait(ctx); err != nil {
-					orm.logger.Warn("Rate limiter error for deployment",
-						"deployment", name, "error", err)
-					return
+					orm.logger.Warn("Rate limiter error between deployments",
+						"deployment", deploymentName, "error", err)
+					continue
 				}
 			}
 
-			if err := orm.attemptSingleDeploymentRecovery(ctx, name); err != nil {
+			// Process single deployment
+			deploymentStartTime := time.Now()
+			if err := orm.attemptSingleDeploymentRecovery(ctx, deploymentName); err != nil {
 				orm.logger.Error("Recovery failed for deployment",
-					"deployment", name, "error", err)
+					"deployment", deploymentName,
+					"batch", batchNumber,
+					"error", err)
+			} else {
+				successCount++
+				orm.logger.Debug("Deployment recovery completed",
+					"deployment", deploymentName,
+					"duration", time.Since(deploymentStartTime))
 			}
-		}(deploymentName)
+
+			// Check for context cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Continue processing
+			}
+		}
+
+		batchDuration := time.Since(batchStartTime)
+		orm.logger.Info("Batch processing completed",
+			"batch_number", batchNumber,
+			"total_batches", (totalDeployments+orm.batchSize-1)/orm.batchSize,
+			"batch_size", len(batch),
+			"successful_recoveries", successCount,
+			"failed_recoveries", len(batch)-successCount,
+			"batch_duration", batchDuration)
+
+		// Add delay between batches (except for the last batch)
+		if end < totalDeployments {
+			batchDelay := time.Second // 1 second delay between batches
+			if orm.batchTimeout > 0 && batchDelay > orm.batchTimeout/10 {
+				batchDelay = orm.batchTimeout / 10 // Use 10% of batch timeout as delay
+			}
+
+			orm.logger.Debug("Waiting between batches",
+				"delay", batchDelay,
+				"next_batch", batchNumber+1)
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(batchDelay):
+				// Continue to next batch
+			}
+		}
 	}
 
-	wg.Wait()
-
 	duration := time.Since(startTime)
+	avgPerDeployment := duration
+	if totalDeployments > 0 {
+		avgPerDeployment = duration / time.Duration(totalDeployments)
+	}
+
 	orm.logger.Info("Recovery processing completed",
-		"total_deployments", len(deployments),
+		"total_deployments", totalDeployments,
 		"duration", duration,
-		"avg_per_deployment", duration/time.Duration(len(deployments)),
+		"avg_per_deployment", avgPerDeployment,
 		"optimizations_used", map[string]bool{
 			"caching":          orm.deploymentCache != nil,
 			"rate_limiting":    orm.rateLimiter != nil,
@@ -304,9 +373,13 @@ func (orm *OptimizedRecoveryManager) attemptSingleDeploymentRecovery(ctx context
 		// Use cache if available
 		deployment, err = orm.deploymentCache.GetDeployment(ctx, deploymentName)
 		if err != nil {
-			return fmt.Errorf("failed to get deployment %s from cache: %w", deploymentName, err)
+			orm.logger.Warn("Cache miss, using direct API call",
+				"deployment", deploymentName, "error", err)
+			// Fall through to direct API call
 		}
-	} else {
+	}
+
+	if deployment == nil {
 		// Fall back to direct API call
 		deployment, err = orm.orchestrator.k8sClient.GetClientset().AppsV1().Deployments(orm.orchestrator.config.Namespace).Get(
 			ctx, deploymentName, metav1.GetOptions{})
@@ -315,20 +388,156 @@ func (orm *OptimizedRecoveryManager) attemptSingleDeploymentRecovery(ctx context
 		}
 	}
 
-	// Perform detailed recovery checks and execution
-	// (Implementation would continue with existing recovery logic)
-
-	orm.logger.Debug("Processing recovery for deployment",
-		"deployment", deploymentName,
-		"current_replicas", *deployment.Spec.Replicas,
-		"using_cache", orm.deploymentCache != nil)
-
-	// Invalidate cache after successful recovery (only if cache is enabled)
-	if orm.deploymentCache != nil {
-		defer orm.deploymentCache.InvalidateDeployment(deploymentName)
+	// Check if deployment is still a recovery candidate with fresh data
+	if !orm.isRecoveryCandidate(deployment) {
+		orm.logger.Debug("Deployment no longer needs recovery",
+			"deployment", deploymentName)
+		return nil
 	}
 
-	return nil
+	// Check spot node availability (only once per recovery cycle, not per deployment)
+	if !orm.spotNodesExist(ctx) {
+		orm.logger.Debug("No spot nodes available, skipping recovery",
+			"deployment", deploymentName)
+		return nil
+	}
+
+	// Create deployment-specific configuration
+	deploymentConfig := annotations.NewDeploymentConfig(orm.orchestrator.config, deployment)
+
+	// Check if recovery is enabled for this deployment
+	if !deploymentConfig.GetRecoveryEnabled() {
+		orm.logger.Debug("Recovery disabled for deployment",
+			"deployment", deploymentName)
+		return nil
+	}
+
+	// Check cooldown period using deployment-specific cooldown
+	if !orm.shouldAttemptRecoveryWithConfig(deployment.Annotations, deploymentConfig) {
+		orm.logger.Debug("Deployment still in cooldown period",
+			"deployment", deploymentName,
+			"cooldown", deploymentConfig.GetRecoveryCooldown())
+		return nil
+	}
+
+	orm.logger.Info("Attempting recovery from Fargate to Spot",
+		"deployment", deploymentName,
+		"cooldown", deploymentConfig.GetRecoveryCooldown())
+
+	// Use the regular recovery manager's logic by calling attemptDeploymentRecovery
+	// Create a temporary recovery manager to access the recovery logic
+	regularRecoveryManager := NewRecoveryManager(orm.orchestrator)
+
+	// Create a deployment info structure for the recovery
+	deploymentInfo := discovery.DeploymentInfo{
+		Name:      deploymentName,
+		Namespace: orm.orchestrator.config.Namespace,
+	}
+
+	// Call the regular recovery manager's attemptDeploymentRecovery method
+	err = regularRecoveryManager.attemptDeploymentRecovery(ctx, deploymentInfo)
+
+	// Invalidate cache after recovery attempt (success or failure)
+	if orm.deploymentCache != nil {
+		orm.deploymentCache.InvalidateDeployment(deploymentName)
+	}
+
+	return err
+}
+
+// spotNodesExist checks if there are any spot nodes available in the cluster
+// This is a cached check to avoid repeated API calls
+func (orm *OptimizedRecoveryManager) spotNodesExist(ctx context.Context) bool {
+	// TODO: This could be cached for better performance
+	nodes, err := orm.orchestrator.k8sClient.GetClientset().CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		orm.logger.Warn("Failed to list nodes for spot check", "error", err)
+		return false
+	}
+
+	for _, node := range nodes.Items {
+		// Check for spot node labels (same logic as in recovery.go)
+		if orm.isSpotNode(&node) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isSpotNode checks if a node is a spot instance (same logic as in recovery.go)
+func (orm *OptimizedRecoveryManager) isSpotNode(node *corev1.Node) bool {
+	// Check for common spot node labels
+	if capacityType, exists := node.Labels["eks.amazonaws.com/capacityType"]; exists && capacityType == "SPOT" {
+		return true
+	}
+	if capacityType, exists := node.Labels["capacity-type"]; exists && capacityType == "spot" {
+		return true
+	}
+	if capacityType, exists := node.Labels["karpenter.sh/capacity-type"]; exists && capacityType == "spot" {
+		return true
+	}
+	if capacityType, exists := node.Labels["node.kubernetes.io/capacity-type"]; exists && capacityType == "spot" {
+		return true
+	}
+
+	// Check for spot instance taints
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == "capacity-type" && taint.Value == "spot" {
+			return true
+		}
+		if taint.Key == "karpenter.sh/capacity-type" && taint.Value == "spot" {
+			return true
+		}
+		if taint.Key == "eks.amazonaws.com/capacityType" && taint.Value == "SPOT" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldAttemptRecoveryWithConfig checks if we should attempt recovery using deployment-specific config
+func (orm *OptimizedRecoveryManager) shouldAttemptRecoveryWithConfig(annotations map[string]string, deploymentConfig *annotations.DeploymentConfig) bool {
+	if annotations == nil {
+		return true
+	}
+
+	// Get the cooldown duration (deployment-specific or global)
+	cooldownDuration := deploymentConfig.GetRecoveryCooldown()
+
+	// Check migration cooldown
+	if migratedAtStr, exists := annotations["spot-orchestrator/migrated-at"]; exists {
+		if migratedAt, err := time.Parse(time.RFC3339, migratedAtStr); err == nil {
+			if time.Since(migratedAt) < cooldownDuration {
+				return false
+			}
+		}
+	}
+
+	// Check recovery backoff based on failed attempts
+	if failedAttemptsStr, exists := annotations["spot-orchestrator.io/failed-recovery-attempts"]; exists {
+		if lastRecoveredStr, exists := annotations["spot-orchestrator.io/last-recovered-at"]; exists {
+			if lastRecovered, err := time.Parse(time.RFC3339, lastRecoveredStr); err == nil {
+				failedAttempts := 0
+				if attempts, parseErr := time.ParseDuration(failedAttemptsStr + "m"); parseErr == nil {
+					failedAttempts = int(attempts.Minutes())
+				}
+
+				// Calculate exponential backoff
+				backoff := time.Duration(failedAttempts) * orm.orchestrator.config.RecoveryBackoffBase
+				if backoff > orm.orchestrator.config.RecoveryMaxBackoff {
+					backoff = orm.orchestrator.config.RecoveryMaxBackoff
+				}
+
+				if time.Since(lastRecovered) < backoff {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
 }
 
 // GetCacheStats returns cache performance statistics

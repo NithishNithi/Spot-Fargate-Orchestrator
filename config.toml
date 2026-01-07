@@ -149,11 +149,11 @@ enabled = false
 
 # Maximum queries per second to the Kubernetes API
 # Lower values = better API protection, slower operations
-qps = 20.0
+qps = 10.0
 
 # Burst allowance for API calls
 # Higher values = better handling of temporary spikes
-burst = 50
+burst = 20
 
 # Timeout for rate-limited requests
 timeout = "30s"
@@ -182,14 +182,14 @@ enabled = false
 
 # Number of deployments to process concurrently
 # Lower values = less resource usage, slower processing
-batch_size = 10
+batch_size = 3
 
 # Maximum time to wait for a batch to complete
 batch_timeout = "30s"
 
 # Maximum number of concurrent batches
 # Controls overall system load
-max_concurrent_batches = 3
+max_concurrent_batches = 1
 
 # ========================================
 # OPTIMIZATION RECOMMENDATIONS
