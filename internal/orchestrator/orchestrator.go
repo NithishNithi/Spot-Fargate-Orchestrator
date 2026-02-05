@@ -50,6 +50,7 @@ type Orchestrator struct {
 	recoveryManager       RecoveryManagerInterface
 	discoveryService      *discovery.DiscoveryService
 	nodeSelectorValidator *patcher.NodeSelectorValidator
+	eventDeduper          *EventDeduper
 	logger                *logger.Logger
 }
 
@@ -121,6 +122,15 @@ func NewOrchestrator(cfg *config.Config, k8sClient *client.K8sClient) (*Orchestr
 	// Initialize discovery service
 	discoveryService := discovery.NewDiscoveryService(k8sClient, cfg)
 
+	// Initialize spot event deduper (idempotency guard)
+	var eventDeduper *EventDeduper
+	if cfg.SpotEventDedupTTL > 0 {
+		eventDeduper = NewEventDeduper(cfg.SpotEventDedupTTL)
+		logger.Info("Spot event deduplication enabled", "ttl", cfg.SpotEventDedupTTL.String())
+	} else {
+		logger.Info("Spot event deduplication disabled", "ttl", cfg.SpotEventDedupTTL.String())
+	}
+
 	orchestrator := &Orchestrator{
 		config:            cfg,
 		spotWatcher:       spotWatcher,
@@ -132,6 +142,7 @@ func NewOrchestrator(cfg *config.Config, k8sClient *client.K8sClient) (*Orchestr
 		annotationManager: annotationManager,
 		alertManager:      alertManager,
 		discoveryService:  discoveryService,
+		eventDeduper:      eventDeduper,
 		logger:            logger,
 	}
 
@@ -220,6 +231,17 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 
 // handleSpotInterruption handles spot interruption events
 func (o *Orchestrator) handleSpotInterruption(ctx context.Context, event watcher.SpotEvent) error {
+	if o.eventDeduper != nil {
+		dedupKey := buildSpotEventDedupKey(event)
+		if o.eventDeduper.CheckAndMark(dedupKey, time.Now()) {
+			o.logger.Info("Skipping duplicate spot interruption event",
+				"instance_id", event.InstanceID,
+				"node_name", event.NodeName,
+				"dedup_key", dedupKey)
+			return nil
+		}
+	}
+
 	o.logger.LogSpotInterruption(event.InstanceID, event.TimeRemaining.String())
 
 	// Send spot interruption alert
@@ -232,6 +254,38 @@ func (o *Orchestrator) handleSpotInterruption(ctx context.Context, event watcher
 
 	// Single deployment mode (existing logic)
 	return o.handleSingleDeploymentSpotInterruption(ctx, event)
+}
+
+func buildSpotEventDedupKey(event watcher.SpotEvent) string {
+	var b strings.Builder
+
+	if event.InstanceID != "" && event.InstanceID != "unknown" {
+		b.WriteString("instance:")
+		b.WriteString(event.InstanceID)
+	}
+
+	if event.NodeName != "" {
+		if b.Len() > 0 {
+			b.WriteString("|")
+		}
+		b.WriteString("node:")
+		b.WriteString(event.NodeName)
+	}
+
+	if event.Notice != nil && !event.Notice.Time.IsZero() {
+		if b.Len() > 0 {
+			b.WriteString("|")
+		}
+		b.WriteString("notice:")
+		b.WriteString(event.Notice.Time.UTC().Format(time.RFC3339Nano))
+	}
+
+	if b.Len() == 0 {
+		b.WriteString("ts:")
+		b.WriteString(event.Timestamp.UTC().Format(time.RFC3339Nano))
+	}
+
+	return b.String()
 }
 
 // handleSingleDeploymentSpotInterruption handles spot interruption for single deployment mode
@@ -363,6 +417,14 @@ func (o *Orchestrator) migrateToFargateWithReason(ctx context.Context, reason st
 	o.logger.Info("Starting migration to Fargate",
 		"deployment", o.config.DeploymentName,
 		"namespace", o.config.Namespace)
+
+	if o.config.DryRun {
+		o.logger.Info("Dry-run enabled: skipping patch and rollout for migration",
+			"deployment", o.config.DeploymentName,
+			"namespace", o.config.Namespace,
+			"reason", reason)
+		return nil
+	}
 
 	// Step 1: Ensure zero-downtime rollout strategy
 	if err := o.ensureZeroDowntimeStrategy(ctx); err != nil {
@@ -1240,6 +1302,17 @@ func (o *Orchestrator) executeTwoPhaseMigration(ctx context.Context, deploymentC
 		"deployment_count", len(deploymentConfigs),
 		"instance_id", event.InstanceID,
 		"time_remaining", event.TimeRemaining.String())
+
+	if o.config.DryRun {
+		for _, deploymentInfo := range deploymentConfigs {
+			o.logger.Info("Dry-run: would patch deployment to Fargate",
+				"deployment", deploymentInfo.Name,
+				"namespace", deploymentInfo.Namespace,
+				"affected_pods", len(deploymentInfo.PodNames))
+		}
+		o.logger.Info("Dry-run enabled: skipping fan-out and observe phases")
+		return nil
+	}
 
 	// PHASE 1: FAN-OUT (fast, non-blocking)
 	// Patch all deployments to Fargate immediately without waiting for rollouts

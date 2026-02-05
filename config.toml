@@ -43,6 +43,10 @@ health_check_retries = 3
 # Interval between health check attempts
 health_check_interval = "2s"
 
+# Deduplicate spot interruption events for this duration
+# Helps ignore duplicate SQS/EventBridge deliveries
+spot_event_dedup_ttl = "10m"
+
 # ========================================
 # MIGRATION CONFIGURATION
 # ========================================
@@ -54,6 +58,9 @@ rollout_timeout = "120s"
 # Delay before verifying migration success
 # Allows pods to stabilize before health checks
 verification_delay = "5s"
+
+# Dry-run mode: log actions but do not patch deployments
+dry_run = true
 
 # ========================================
 # RECOVERY CONFIGURATION
