@@ -84,6 +84,7 @@ func NewOrchestrator(cfg *config.Config, k8sClient *client.K8sClient) (*Orchestr
 			cfg.Namespace,
 			cfg.AWSRegion,
 			cfg.SQSQueueURL,
+			cfg.OptInAnnotation,
 		)
 	}
 
