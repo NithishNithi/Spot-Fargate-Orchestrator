@@ -210,7 +210,10 @@ func (r *RolloutMonitor) isRolloutComplete(deployment *appsv1.Deployment) bool {
 	}
 
 	// Check if all replicas are updated, ready, and available
-	desiredReplicas := *deployment.Spec.Replicas
+	desiredReplicas := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = *deployment.Spec.Replicas
+	}
 	if deployment.Status.UpdatedReplicas != desiredReplicas ||
 		deployment.Status.ReadyReplicas != desiredReplicas ||
 		deployment.Status.AvailableReplicas != desiredReplicas {

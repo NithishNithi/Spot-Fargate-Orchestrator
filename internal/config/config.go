@@ -28,10 +28,12 @@ type Config struct {
 	CheckInterval       time.Duration `env:"CHECK_INTERVAL" default:"5s"`
 	HealthCheckRetries  int           `env:"HEALTH_CHECK_RETRIES" default:"3"`
 	HealthCheckInterval time.Duration `env:"HEALTH_CHECK_INTERVAL" default:"2s"`
+	SpotEventDedupTTL   time.Duration `env:"SPOT_EVENT_DEDUP_TTL" default:"10m"`
 
 	// Migration Configuration
 	RolloutTimeout    time.Duration `env:"ROLLOUT_TIMEOUT" default:"120s"`
 	VerificationDelay time.Duration `env:"VERIFICATION_DELAY" default:"5s"`
+	DryRun            bool          `env:"DRY_RUN" default:"false"`
 
 	// Recovery Configuration
 	RecoveryEnabled     bool          `env:"RECOVERY_ENABLED" default:"true"`
@@ -89,11 +91,13 @@ type TOMLConfig struct {
 		CheckInterval       string `toml:"check_interval"`
 		HealthCheckRetries  int    `toml:"health_check_retries"`
 		HealthCheckInterval string `toml:"health_check_interval"`
+		SpotEventDedupTTL   string `toml:"spot_event_dedup_ttl"`
 	} `toml:"monitoring"`
 
 	Migration struct {
 		RolloutTimeout    string `toml:"rollout_timeout"`
 		VerificationDelay string `toml:"verification_delay"`
+		DryRun            bool   `toml:"dry_run"`
 	} `toml:"migration"`
 
 	Recovery struct {
@@ -264,6 +268,11 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("invalid HEALTH_CHECK_INTERVAL: %w", err)
 	}
 
+	config.SpotEventDedupTTL, err = getEnvAsDurationOrTOMLOrDefault("SPOT_EVENT_DEDUP_TTL", tomlConfig.Monitoring.SpotEventDedupTTL, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SPOT_EVENT_DEDUP_TTL: %w", err)
+	}
+
 	config.RolloutTimeout, err = getEnvAsDurationOrTOMLOrDefault("ROLLOUT_TIMEOUT", tomlConfig.Migration.RolloutTimeout, 120*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ROLLOUT_TIMEOUT: %w", err)
@@ -272,6 +281,11 @@ func LoadConfig() (*Config, error) {
 	config.VerificationDelay, err = getEnvAsDurationOrTOMLOrDefault("VERIFICATION_DELAY", tomlConfig.Migration.VerificationDelay, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("invalid VERIFICATION_DELAY: %w", err)
+	}
+
+	config.DryRun, err = getEnvAsBoolOrTOMLOrDefault("DRY_RUN", tomlConfig.Migration.DryRun, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid DRY_RUN: %w", err)
 	}
 
 	// Load recovery duration fields

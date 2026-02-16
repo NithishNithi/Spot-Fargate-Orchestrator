@@ -24,6 +24,7 @@ type EventBridgeSpotWatcher struct {
 	deploymentName    string
 	namespace         string
 	region            string
+	optInAnnotation   string
 }
 
 // NewEventBridgeSpotWatcher creates a new EventBridge-based spot watcher for single deployment
@@ -43,11 +44,12 @@ func NewEventBridgeSpotWatcher(k8sClient *client.K8sClient, deploymentName, name
 		deploymentName:    deploymentName,
 		namespace:         namespace,
 		region:            region,
+		optInAnnotation:   "",
 	}, nil
 }
 
 // NewMultiDeploymentEventBridgeSpotWatcher creates a new EventBridge-based spot watcher for multiple deployments
-func NewMultiDeploymentEventBridgeSpotWatcher(k8sClient *client.K8sClient, namespace, region, queueURL string) (*EventBridgeSpotWatcher, error) {
+func NewMultiDeploymentEventBridgeSpotWatcher(k8sClient *client.K8sClient, namespace, region, queueURL, optInAnnotation string) (*EventBridgeSpotWatcher, error) {
 	logger := logger.NewDefault("eventbridge-spot-watcher")
 
 	eventBridgeClient, err := eventbridge.NewEventBridgeClient(region, queueURL)
@@ -63,6 +65,7 @@ func NewMultiDeploymentEventBridgeSpotWatcher(k8sClient *client.K8sClient, names
 		deploymentName:    "", // Empty for multi-deployment mode
 		namespace:         namespace,
 		region:            region,
+		optInAnnotation:   optInAnnotation,
 	}, nil
 }
 
@@ -380,9 +383,12 @@ func (w *EventBridgeSpotWatcher) hasOptInAnnotation(deployment *appsv1.Deploymen
 		return false
 	}
 
-	// For multi-deployment mode, we need to check the standard opt-in annotation
-	// Since we don't have access to config here, we'll use the standard annotation
-	value, exists := deployment.Annotations["spot-orchestrator/enabled"]
+	if w.optInAnnotation == "" {
+		w.logger.Warn("Opt-in annotation key is empty; skipping deployment opt-in check")
+		return false
+	}
+
+	value, exists := deployment.Annotations[w.optInAnnotation]
 	if !exists {
 		return false
 	}
